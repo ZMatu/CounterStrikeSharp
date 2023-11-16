@@ -20,12 +20,14 @@
 #include "schema.h"
 
 #include "interfaces/cs2_interfaces.h"
-#include "../globals.h"
-// #include <unordered_map>
-#include "tier1/utlmap.h"
-#include "tier0/memdbgon.h"
-#include "../memory.h"
+#include "core/globals.h"
+#include "core/memory.h"
 #include "core/log.h"
+
+#include "tier1/utlmap.h"
+
+// memdbgon must be the last include file in a .cpp file!!!
+#include "tier0/memdbgon.h"
 
 using SchemaKeyValueMap_t = CUtlMap<uint32_t, SchemaKey>;
 using SchemaTableMap_t = CUtlMap<uint32_t, SchemaKeyValueMap_t*>;
@@ -57,8 +59,8 @@ static bool InitSchemaFieldsForClass(SchemaTableMap_t* tableMap,
         return false;
     }
 
-    short fieldsSize = pClassInfo->GetFieldsSize();
-    SchemaClassFieldData_t* pFields = pClassInfo->GetFields();
+    short fieldsSize = pClassInfo->m_align;
+    SchemaClassFieldData_t* pFields = pClassInfo->m_fields;
 
     SchemaKeyValueMap_t* keyValueMap = new SchemaKeyValueMap_t(0, 0, DefLessFunc(uint32_t));
     keyValueMap->EnsureCapacity(fieldsSize);
@@ -68,7 +70,7 @@ static bool InitSchemaFieldsForClass(SchemaTableMap_t* tableMap,
         SchemaClassFieldData_t& field = pFields[i];
 
         keyValueMap->Insert(hash_32_fnv1a_const(field.m_name),
-                            {field.m_offset, IsFieldNetworked(field)});
+                            {field.m_single_inheritance_offset, IsFieldNetworked(field)});
     }
 
     return true;
@@ -80,16 +82,16 @@ int16_t schema::FindChainOffset(const char* className) {
 
     if (!pType) return false;
 
-    SchemaClassInfoData_t* pClassInfo = pType->FindDeclaredClass(className);
+    auto* pClassInfo = pType->FindDeclaredClass(className);
 
     do {
-        SchemaClassFieldData_t* pFields = pClassInfo->GetFields();
-        short fieldsSize = pClassInfo->GetFieldsSize();
+        SchemaClassFieldData_t* pFields = pClassInfo->m_fields;
+        short fieldsSize = pClassInfo->m_align;
         for (int i = 0; i < fieldsSize; ++i) {
             SchemaClassFieldData_t& field = pFields[i];
 
             if (V_strcmp(field.m_name, "__m_pChainEntity") == 0) {
-                return field.m_offset;
+                return field.m_single_inheritance_offset;
             }
         }
     } while ((pClassInfo = pClassInfo->GetParent()) != nullptr);

@@ -1,4 +1,4 @@
-ADD_COMMAND: name:string,description:string,serverOnly:bool,flags:int,callback:callback -> pointer
+ADD_COMMAND: name:string,description:string,serverOnly:bool,flags:int,callback:callback -> void
 REMOVE_COMMAND: name:string,callback:callback -> void
 ADD_COMMAND_LISTENER: cmd:string, callback:callback, post:bool -> void
 REMOVE_COMMAND_LISTENER: cmd:string, callback:callback, post:bool -> void
@@ -7,3 +7,5 @@ COMMAND_GET_ARG_STRING: command:pointer -> string
 COMMAND_GET_COMMAND_STRING: command:pointer -> string
 COMMAND_GET_ARG_BY_INDEX: command:pointer,index:int -> string
 ISSUE_CLIENT_COMMAND: clientIndex:int,command:string -> void
+FIND_CONVAR: name:string -> pointer
+SET_CONVAR_STRING_VALUE: convar:pointer,value:string -> void

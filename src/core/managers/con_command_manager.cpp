@@ -38,307 +38,367 @@
 
 #include "scripting/callback_manager.h"
 #include "core/log.h"
+#include "core/cs2_sdk/interfaces/cschemasystem.h"
+#include "core/utils.h"
+#include "core/memory.h"
+#include "interfaces/cs2_interfaces.h"
+#include <nlohmann/json.hpp>
+
+#include "metamod_oslink.h"
+using json = nlohmann::json;
 
 namespace counterstrikesharp {
 
-SH_DECL_HOOK2_void(
-    ConCommandHandle, Dispatch, SH_NOATTRIB, false, const CCommandContext&, const CCommand&);
+json WriteTypeJson(json obj, CSchemaType* current_type)
+{
+    obj["name"] = current_type->m_name_;
+    obj["category"] = current_type->type_category;
 
-void ConCommandInfo::HookChange(CallbackT cb, bool post) {
-    if (post) {
-        this->callback_post->AddListener(cb);
-    } else {
-        this->callback_pre->AddListener(cb);
+    if (current_type->type_category == Schema_Atomic) {
+        obj["atomic"] = current_type->atomic_category;
+
+        if (current_type->atomic_category == Atomic_T &&
+            current_type->m_atomic_t_.generic_type != nullptr) {
+            obj["outer"] = current_type->m_atomic_t_.generic_type->m_name_;
+        }
+
+        if (current_type->atomic_category == Atomic_T ||
+            current_type->atomic_category == Atomic_CollectionOfT) {
+            obj["inner"] =
+                WriteTypeJson(json::object(), current_type->m_atomic_t_.template_typename);
+        }
+    } else if (current_type->type_category == Schema_FixedArray) {
+        obj["inner"] = WriteTypeJson(json::object(), current_type->m_array_.element_type_);
+    } else if (current_type->type_category == Schema_Ptr) {
+        obj["inner"] = WriteTypeJson(json::object(), current_type->m_schema_type_);
     }
+
+    return obj;
 }
 
-void ConCommandInfo::UnhookChange(CallbackT cb, bool post) {
-    if (post) {
-        if (this->callback_post && this->callback_post->GetFunctionCount()) {
-            callback_post->RemoveListener(cb);
+CON_COMMAND(dump_schema, "dump schema symbols")
+{
+    std::vector<std::string> classNames;
+    std::vector<std::string> enumNames;
+    // Reading these from a static file since I cannot seem to get the
+    // CSchemaSystemTypeScope->GetClasses() to return anything on linux.
+    std::ifstream inputClasses(utils::GamedataDirectory() + "/schema_classes.txt");
+    std::ifstream inputEnums(utils::GamedataDirectory() + "/schema_enums.txt");
+    std::ofstream output(utils::GamedataDirectory() + "/schema.json");
+    std::string line;
+
+    while (std::getline(inputClasses, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
         }
-    } else {
-        if (this->callback_pre && this->callback_pre->GetFunctionCount()) {
-            callback_pre->RemoveListener(cb);
+        classNames.push_back(line);
+    }
+
+    while (std::getline(inputEnums, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        enumNames.push_back(line);
+    }
+
+    CSchemaSystemTypeScope* pType =
+        interfaces::pSchemaSystem->FindTypeScopeForModule(MODULE_PREFIX "server" MODULE_EXT);
+
+    json j;
+    j["classes"] = json::object();
+    j["enums"] = json::object();
+
+    for (const auto& line : classNames) {
+        SchemaClassInfoData_t* pClassInfo = pType->FindDeclaredClass(line.c_str());
+        if (!pClassInfo)
+            continue;
+
+        short fieldsSize = pClassInfo->m_align;
+        SchemaClassFieldData_t* pFields = pClassInfo->m_fields;
+
+        j["classes"][pClassInfo->m_name] = json::object();
+        if (pClassInfo->m_schema_parent) {
+            j["classes"][pClassInfo->m_name]["parent"] =
+                pClassInfo->m_schema_parent->m_class->m_name;
+        }
+
+        j["classes"][pClassInfo->m_name]["fields"] = json::array();
+
+        for (int i = 0; i < fieldsSize; ++i) {
+            SchemaClassFieldData_t& field = pFields[i];
+
+            j["classes"][pClassInfo->m_name]["fields"].push_back({
+                {"name", field.m_name},
+                {"type", WriteTypeJson(json::object(), field.m_type)},
+            });
         }
     }
+
+    for (const auto& line : enumNames) {
+        auto* pEnumInfo = pType->FindDeclaredEnum(line.c_str());
+        if (!pEnumInfo)
+            continue;
+
+        j["enums"][pEnumInfo->m_binding_name_] = json::object();
+        j["enums"][pEnumInfo->m_binding_name_]["align"] = pEnumInfo->m_align_;
+        j["enums"][pEnumInfo->m_binding_name_]["items"] = json::array();
+
+        for (int i = 0; i < pEnumInfo->m_size_; ++i) {
+            auto& field = pEnumInfo->m_enum_info_[i];
+
+            j["enums"][pEnumInfo->m_binding_name_]["items"].push_back({
+                {"name", field.m_name},
+                {"value", field.m_value},
+            });
+        }
+    }
+
+    Msg("Schema dumped to %s\n", (utils::GamedataDirectory() + "/schema.json").c_str());
+    output << std::setw(2) << j << std::endl;
 }
 
-ConCommandManager::ConCommandManager()
-    : last_command_client(-1) {}
+SH_DECL_HOOK3_void(ICvar, DispatchConCommand, SH_NOATTRIB, 0, ConCommandHandle,
+                   const CCommandContext&, const CCommand&);
+
+ConCommandInfo::ConCommandInfo()
+{
+    callback_pre = globals::callbackManager.CreateCallback("");
+    callback_post = globals::callbackManager.CreateCallback("");
+}
+ConCommandInfo::~ConCommandInfo()
+{
+    globals::callbackManager.ReleaseCallback(callback_pre);
+    globals::callbackManager.ReleaseCallback(callback_post);
+}
+ConCommandInfo::ConCommandInfo(bool bNoCallbacks) {
+
+}
+
+ConCommandManager::ConCommandManager() {}
 
 ConCommandManager::~ConCommandManager() {}
 
-void ConCommandManager::OnAllInitialized() {}
+void ConCommandManager::OnAllInitialized()
+{
+    SH_ADD_HOOK_MEMFUNC(ICvar, DispatchConCommand, globals::cvars, this,
+                        &ConCommandManager::Hook_DispatchConCommand, false);
+    SH_ADD_HOOK_MEMFUNC(ICvar, DispatchConCommand, globals::cvars, this,
+                        &ConCommandManager::Hook_DispatchConCommand_Post, true);
 
-void ConCommandManager::OnShutdown() {}
-
-void CommandCallback(const CCommandContext& context, const CCommand& command) {
-    bool rval = globals::conCommandManager.InternalDispatch(
-        context.GetPlayerSlot(), &command);
-
-    if (rval) {
-        RETURN_META(MRES_SUPERCEDE);
-    }
+    m_global_cmd.callback_pre = globals::callbackManager.CreateCallback("OnClientCommandGlobalPre");
+    m_global_cmd.callback_post =
+        globals::callbackManager.CreateCallback("OnClientCommandGlobalPost");
 }
 
-void CommandCallback_Post(const CCommandContext& context, const CCommand& command) {
-    bool rval = globals::conCommandManager.InternalDispatch_Post(context.GetPlayerSlot(), &command);
+void ConCommandManager::OnShutdown()
+{
+    SH_REMOVE_HOOK_MEMFUNC(ICvar, DispatchConCommand, globals::cvars, this,
+                           &ConCommandManager::Hook_DispatchConCommand, false);
+    SH_REMOVE_HOOK_MEMFUNC(ICvar, DispatchConCommand, globals::cvars, this,
+                           &ConCommandManager::Hook_DispatchConCommand_Post, true);
 
-    if (rval) {
-        RETURN_META(MRES_SUPERCEDE);
-    }
+    globals::callbackManager.ReleaseCallback(m_global_cmd.callback_pre);
+    globals::callbackManager.ReleaseCallback(m_global_cmd.callback_post);
 }
 
-ConCommandInfo* ConCommandManager::AddOrFindCommand(const char* name,
-                                                    const char* description,
-                                                    bool server_only,
-                                                    int flags) {
-    ConCommandInfo* p_info = m_cmd_lookup[std::string(name)];
+void CommandCallback(const CCommandContext& context, const CCommand& command)
+{
+    // This is handled by the global hook
+    RETURN_META(MRES_SUPERCEDE);
+}
 
-    if (!p_info) {
-        CSSHARP_CORE_TRACE("[ConCommandManager] Could not find command in existing lookup {}", name);
-        //        auto found = std::find_if(m_cmd_list.begin(), m_cmd_list.end(),
-        //        [&](ConCommandInfo* info) {
-        //            return V_strcasecmp(info->command->GetName(), name) == 0;
-        //        });
-        //        if (found != m_cmd_list.end()) {
-        //            return *found;
-        //        }
-        p_info = new ConCommandInfo();
-        ConCommandHandle existingCommand = globals::cvars->FindCommand(name);
-        ConCommandRefAbstract pointerConCommand;
-        p_info->p_cmd = pointerConCommand;
-
-        if (!existingCommand.IsValid()) {
-            if (!description) {
-                description = "";
-            }
-
-            CSSHARP_CORE_TRACE("[ConCommandManager] Creating new command {}", name);
-
-            char* new_name = strdup(name);
-            char* new_desc = strdup(description);
-
-            CSSHARP_CORE_TRACE("[ConCommandManager] Creating new command {}, {}, {}, {}, {}", (void*)&pointerConCommand, new_name, (void*)CommandCallback, new_desc, flags);
-
-            auto conCommand =
-                new ConCommand(&pointerConCommand, new_name, CommandCallback, new_desc, flags);
-            
-            CSSHARP_CORE_TRACE("[ConCommandManager] Creating callbacks for command {}", name);
-
-            p_info->command = conCommand;
-            p_info->callback_pre = globals::callbackManager.CreateCallback(name);
-            p_info->callback_post = globals::callbackManager.CreateCallback(name);
-            p_info->server_only = server_only;
-
-            CSSHARP_CORE_TRACE("[ConCommandManager] Adding hooks for command callback for command {}", name);
-
-            SH_ADD_HOOK(ConCommandHandle, Dispatch, &pointerConCommand.handle, SH_STATIC(CommandCallback), false);
-            SH_ADD_HOOK(ConCommandHandle, Dispatch, &pointerConCommand.handle, SH_STATIC(CommandCallback_Post), true);
-
-            CSSHARP_CORE_TRACE("[ConCommandManager] Adding command to internal lookup {}", name);
-
-            m_cmd_list.push_back(p_info);
-            m_cmd_lookup[name] = p_info;
+void ConCommandManager::AddCommandListener(const char* name, CallbackT callback, HookMode mode)
+{
+    if (name == nullptr) {
+        if (mode == HookMode::Pre) {
+            m_global_cmd.callback_pre->AddListener(callback);
         } else {
-            //            p_info->callback_pre = globals::callbackManager.CreateCallback(name);
-            //            p_info->callback_post = globals::callbackManager.CreateCallback(name);
-            //            p_info->server_only = server_only;
-            //
-            //            SH_ADD_HOOK(ConCommandHandle, Dispatch, pointerConCommand->handle,
-            //            SH_STATIC(CommandCallback), false); SH_ADD_HOOK(ConCommandHandle,
-            //            Dispatch, pointerConCommand->handle, SH_STATIC(CommandCallback_Post),
-            //            true);
+            m_global_cmd.callback_post->AddListener(callback);
         }
-
-        return p_info;
+        return;
     }
 
-    return p_info;
+    auto strName = std::string(name);
+    ConCommandInfo* pInfo = m_cmd_lookup[strName];
+
+    if (!pInfo) {
+        pInfo = new ConCommandInfo();
+        m_cmd_lookup[strName] = pInfo;
+
+        ConCommandHandle hExistingCommand = globals::cvars->FindCommand(name);
+        if (hExistingCommand.IsValid()) {
+            pInfo->command = globals::cvars->GetCommand(hExistingCommand);
+        }
+    }
+
+    if (mode == HookMode::Pre) {
+        pInfo->callback_pre->AddListener(callback);
+    } else {
+        pInfo->callback_post->AddListener(callback);
+    }
 }
 
-ConCommandInfo* ConCommandManager::AddCommand(
-    const char* name, const char* description, bool server_only, int flags, CallbackT callback) {
-    ConCommandInfo* p_info = AddOrFindCommand(name, description, server_only, flags);
-    if (!p_info || !p_info->callback_pre) {
-        return nullptr;
+void ConCommandManager::RemoveCommandListener(const char* name, CallbackT callback, HookMode mode)
+{
+    if (name == nullptr) {
+        if (mode == HookMode::Pre) {
+            m_global_cmd.callback_pre->RemoveListener(callback);
+        } else {
+            m_global_cmd.callback_post->RemoveListener(callback);
+        }
+        return;
     }
 
-    p_info->callback_pre->AddListener(callback);
+    auto strName = std::string(name);
+    ConCommandInfo* pInfo = m_cmd_lookup[strName];
 
-    return p_info;
+    if (!pInfo) {
+        return;
+    }
+
+    if (mode == HookMode::Pre) {
+        pInfo->callback_pre->RemoveListener(callback);
+    } else {
+        pInfo->callback_post->RemoveListener(callback);
+    }
 }
 
-bool ConCommandManager::RemoveCommand(const char* name, CallbackT callback) {
-    auto strName = std::string(strdup(name));
-    ConCommandInfo* p_info = m_cmd_lookup[strName];
-    if (!p_info) return false;
+bool ConCommandManager::AddValveCommand(const char* name, const char* description, bool server_only,
+                                        int flags)
+{
+    ConCommandHandle hExistingCommand = globals::cvars->FindCommand(name);
+    if (hExistingCommand.IsValid())
+        return false;
 
-    if (p_info->callback_pre && p_info->callback_pre->GetFunctionCount()) {
-        p_info->callback_pre->RemoveListener(callback);
+    ConCommandRefAbstract conCommandRefAbstract;
+    auto conCommand =
+        new ConCommand(&conCommandRefAbstract, strdup(name), CommandCallback, strdup(description), flags);
+
+    ConCommandInfo* pInfo = m_cmd_lookup[std::string(name)];
+
+    if (!pInfo) {
+        pInfo = new ConCommandInfo();
+        m_cmd_lookup[std::string(name)] = pInfo;
     }
 
-    if (p_info->callback_post && p_info->callback_post->GetFunctionCount()) {
-        p_info->callback_post->RemoveListener(callback);
-    }
-
-    if (!p_info->callback_pre || p_info->callback_pre->GetFunctionCount() == 0) {
-        globals::cvars->UnregisterConCommand(p_info->p_cmd.handle);
-
-        bool success;
-        auto it = std::remove_if(m_cmd_list.begin(), m_cmd_list.end(),
-                                 [p_info](ConCommandInfo* i) { return p_info == i; });
-
-        if ((success = it != m_cmd_list.end())) m_cmd_list.erase(it, m_cmd_list.end());
-        // if (success) {
-        //     m_cmd_lookup[strName] = nullptr;
-        // }
-
-        return success;
-    }
+    pInfo->p_cmd = conCommandRefAbstract;
+    pInfo->command = conCommand;
+    pInfo->server_only = server_only;
 
     return true;
 }
 
-ConCommandInfo* ConCommandManager::FindCommand(const char* name) {
-    ConCommandInfo* p_info = m_cmd_lookup[std::string(name)];
+bool ConCommandManager::RemoveValveCommand(const char* name)
+{
+    auto hFoundCommand = globals::cvars->FindCommand(name);
 
-    if (p_info == nullptr) {
-        auto found = std::find_if(m_cmd_list.begin(), m_cmd_list.end(), [&](ConCommandInfo* info) {
-            return V_strcasecmp(info->command->GetName(), name) == 0;
-        });
-        if (found != m_cmd_list.end()) {
-            return *found;
-        }
-
-        ConCommandHandle p_cmd = globals::cvars->FindCommand(name);
-        if (!p_cmd.IsValid()) return nullptr;
-
-        p_info = new ConCommandInfo();
-        p_info->command = globals::cvars->GetCommand(p_cmd);
-
-        p_info->p_cmd = *p_info->command->GetRef();
-        p_info->callback_pre = globals::callbackManager.CreateCallback(name);
-        p_info->callback_post = globals::callbackManager.CreateCallback(name);
-        p_info->server_only = false;
-
-        m_cmd_list.push_back(p_info);
-        m_cmd_lookup[name] = p_info;
-
-        return p_info;
-    }
-
-    return p_info;
-}
-
-int ConCommandManager::GetCommandClient() { return last_command_client; }
-
-void ConCommandManager::SetCommandClient(int client) { last_command_client = client + 1; }
-
-bool ConCommandManager::InternalDispatch(CPlayerSlot slot, const CCommand* args) {
-    const char* cmd = args->Arg(0);
-
-    ConCommandInfo* p_info = m_cmd_lookup[cmd];
-    if (p_info == nullptr) {
-        if (slot.Get() == 0 && !globals::engine->IsDedicatedServer()) return false;
-
-        for (ConCommandInfo* cmdInfo : m_cmd_list) {
-            if ((cmdInfo != nullptr) && strcasecmp(cmdInfo->command->GetName(), cmd) == 0) {
-                p_info = cmdInfo;
-                continue;
-            }
-        }
-    }
-
-    if (!p_info) {
+    if (!hFoundCommand.IsValid()) {
         return false;
     }
 
-    int realClient = slot.Get();
+    globals::cvars->UnregisterConCommand(hFoundCommand);
 
-    bool result = false;
-    if (p_info->callback_pre) {
-        p_info->callback_pre->ScriptContext().Reset();
-        p_info->callback_pre->ScriptContext().SetArgument(0, realClient);
-        p_info->callback_pre->ScriptContext().SetArgument(1, args);
-        p_info->callback_pre->Execute(false);
-
-        result = p_info->callback_pre->ScriptContext().GetResult<bool>();
+    auto pInfo = m_cmd_lookup[std::string(name)];
+    if (!pInfo) {
+        return true;
     }
 
-    return result;
+    pInfo->command = nullptr;
+
+    return true;
 }
 
-bool ConCommandManager::InternalDispatch_Post(CPlayerSlot slot, const CCommand* args) {
-    const char* cmd = args->Arg(0);
+HookResult ConCommandManager::ExecuteCommandCallbacks(const char* name, const CCommandContext& ctx,
+                                                      const CCommand& args, HookMode mode)
+{
+    CSSHARP_CORE_TRACE("[ConCommandManager::ExecuteCommandCallbacks][{}]: {}",
+                       mode == Pre ? "Pre" : "Post", name);
+    ConCommandInfo* pInfo = m_cmd_lookup[std::string(name)];
 
-    ConCommandInfo* p_info = m_cmd_lookup[cmd];
-    if (p_info == nullptr) {
-        if (slot.Get() == 0 && !globals::engine->IsDedicatedServer()) return false;
+    HookResult result = HookResult::Continue;
 
-        for (ConCommandInfo* cmdInfo : m_cmd_list) {
-            if ((cmdInfo != nullptr) && strcasecmp(cmdInfo->command->GetName(), cmd) == 0) {
-                p_info = cmdInfo;
+    auto globalCallback = mode == HookMode::Pre ? m_global_cmd.callback_pre : m_global_cmd.callback_post;
+
+    if (globalCallback->GetFunctionCount() > 0) {
+        globalCallback->ScriptContext().Reset();
+        globalCallback->ScriptContext().Push(ctx.GetPlayerSlot().Get());
+        globalCallback->ScriptContext().Push(&args);
+
+        for (auto fnMethodToCall : globalCallback->GetFunctions()) {
+            if (!fnMethodToCall)
                 continue;
+            fnMethodToCall(&globalCallback->ScriptContextStruct());
+
+            auto hookResult = globalCallback->ScriptContext().GetResult<HookResult>();
+
+            if (hookResult >= HookResult::Stop) {
+                if (mode == HookMode::Pre) {
+                    return HookResult::Stop;
+                }
+
+                result = hookResult;
+                break;
+            }
+
+            if (hookResult >= HookResult::Handled) {
+                result = hookResult;
             }
         }
     }
 
-    int realClient = slot.Get();
-
-    bool result = false;
-    if (p_info->callback_post) {
-        p_info->callback_post->ScriptContext().Reset();
-        p_info->callback_post->ScriptContext().SetArgument(0, realClient);
-        p_info->callback_post->ScriptContext().SetArgument(1, args);
-        p_info->callback_post->Execute(false);
-
-        result = p_info->callback_post->ScriptContext().GetResult<bool>();
+    if (!pInfo) {
+        return result;
     }
 
-    return result;
-}
+    auto pCallback = mode == HookMode::Pre ? pInfo->callback_pre : pInfo->callback_post;
 
-bool ConCommandManager::DispatchClientCommand(CPlayerSlot slot,
-                                              const char* cmd,
-                                              const CCommand* args) {
-    ConCommandInfo* p_info = m_cmd_lookup[cmd];
-    if (p_info == nullptr) {
-        auto found =
-            std::find_if(m_cmd_list.begin(), m_cmd_list.end(), [&](const ConCommandInfo* info) {
-                return V_strcasecmp(info->command->GetName(), cmd) == 0;
-            });
-        if (found == m_cmd_list.end()) {
-            return false;
-        }
+    pCallback->Reset();
+    pCallback->ScriptContext().Push(ctx.GetPlayerSlot().Get());
+    pCallback->ScriptContext().Push(&args);
 
-        p_info = *found;
-    }
+    for (auto fnMethodToCall : pCallback->GetFunctions()) {
+        if (!fnMethodToCall)
+            continue;
+        fnMethodToCall(&pCallback->ScriptContextStruct());
 
-    if (p_info->server_only) return false;
+        auto thisResult = pCallback->ScriptContext().GetResult<HookResult>();
 
-    bool result = false;
-    if (p_info->callback_pre) {
-        p_info->callback_pre->ScriptContext().Reset();
-        p_info->callback_pre->ScriptContext().Push(slot.Get());
-        p_info->callback_pre->ScriptContext().Push(args);
-        p_info->callback_pre->Execute();
-
-        result = true;
-    }
-
-    if (result) {
-        if (p_info->callback_post) {
-            p_info->callback_post->ScriptContext().Reset();
-            p_info->callback_post->ScriptContext().Push(slot.Get());
-            p_info->callback_post->ScriptContext().Push(args);
-            p_info->callback_post->Execute();
-
-            result = true;
+        if (thisResult >= HookResult::Handled) {
+            return result;
+        } else if (thisResult > result) {
+            result = thisResult;
         }
     }
 
     return result;
 }
-}  // namespace counterstrikesharp
+
+void ConCommandManager::Hook_DispatchConCommand(ConCommandHandle cmd, const CCommandContext& ctx,
+                                                const CCommand& args)
+{
+    const char* name = args.Arg(0);
+
+    CSSHARP_CORE_TRACE("[ConCommandManager::Hook_DispatchConCommand]: {}", name);
+
+    auto result = ExecuteCommandCallbacks(name, ctx, args, HookMode::Pre);
+    if (result >= HookResult::Handled) {
+        RETURN_META(MRES_SUPERCEDE);
+    }
+}
+void ConCommandManager::Hook_DispatchConCommand_Post(ConCommandHandle cmd,
+                                                     const CCommandContext& ctx,
+                                                     const CCommand& args)
+{
+    const char* name = args.Arg(0);
+
+    auto result = ExecuteCommandCallbacks(name, ctx, args, HookMode::Post);
+    if (result >= HookResult::Handled) {
+        RETURN_META(MRES_SUPERCEDE);
+    }
+}
+bool ConCommandManager::IsValidValveCommand(const char* name) {
+    ConCommandHandle pCmd = globals::cvars->FindCommand(name);
+    return pCmd.IsValid();
+}
+
+} // namespace counterstrikesharp
