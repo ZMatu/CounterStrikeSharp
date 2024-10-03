@@ -4,7 +4,7 @@ updates:
   - package-ecosystem: "gitsubmodule"
     directory: "/"
     allow:
-      - dependency-name: "libraries/hl2sdk-cs2"
+      - dependency-name: "libraries/sourcesdk"
       - dependency-name: "libraries/metamod-source"
     schedule:
       interval: "daily"
