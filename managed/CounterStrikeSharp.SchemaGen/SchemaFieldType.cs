@@ -15,7 +15,7 @@ public record SchemaFieldType
         this.Atomic = Atomic;
         this.Inner = Inner;
 
-        if (this.Name == "GameTime_t")
+        if (this.Name == "GameTime_t" || this.Name == "CNetworkedQuantizedFloat")
         {
             this.Category = SchemaTypeCategory.Builtin;
             this.Name = "float32";
@@ -26,6 +26,11 @@ public record SchemaFieldType
             this.Category = SchemaTypeCategory.Builtin;
             this.Name = "int32";
         }
+        else if (this.Name == "AmmoIndex_t")
+        {
+            this.Category = SchemaTypeCategory.Builtin;
+            this.Name = "uint8";
+        }
         else if (this.Name == "CBitVec< 64 >")
         {
             this.Category = SchemaTypeCategory.FixedArray;
@@ -35,7 +40,7 @@ public record SchemaFieldType
     }
 
     public bool IsString =>
-        Category == SchemaTypeCategory.FixedArray
+        (Category == SchemaTypeCategory.FixedArray || Category == SchemaTypeCategory.Ptr)
         && Inner!.Category == SchemaTypeCategory.Builtin
         && Inner.Name == "char";
 
@@ -68,6 +73,7 @@ public record SchemaFieldType
         "uint32" => "UInt32",
         "uint64" => "UInt64",
         "bool" => "bool",
+        "char" => "char",
         _ => throw new ArgumentOutOfRangeException(nameof(name), name, $"Unknown built-in: {name}")
     };
 
@@ -76,7 +82,7 @@ public record SchemaFieldType
         {
             SchemaAtomicCategory.Basic => name switch
             {
-                "CUtlString" or "CUtlSymbolLarge" => "string",
+                "CUtlString" or "CUtlSymbolLarge" or "CGlobalSymbol" => "string",
                 "CEntityHandle" => "CHandle<CEntityInstance>",
                 "CNetworkedQuantizedFloat" => "float",
                 "RotationVector" => "Vector",
@@ -85,13 +91,16 @@ public record SchemaFieldType
             SchemaAtomicCategory.T => $"{name.Split('<')[0]}<{inner!.CsTypeName}>",
             SchemaAtomicCategory.Collection => $"NetworkedVector<{inner!.CsTypeName}>",
             SchemaAtomicCategory.Unknown => "CBitVec",
+            SchemaAtomicCategory.TT => "Unknown",
             _ => throw new ArgumentOutOfRangeException(nameof(atomic), atomic, $"Unsupported atomic: {atomic}")
         };
 
     public string CsTypeName => Category switch
     {
         SchemaTypeCategory.Builtin => BuiltinToCsKeyword(Name),
-        SchemaTypeCategory.Ptr => $"{Inner!.CsTypeName}?",
+        SchemaTypeCategory.Ptr => IsString
+            ? "string"
+            : $"{Inner!.CsTypeName}?",
         SchemaTypeCategory.FixedArray => IsString
             ? "string"
             : $"{Inner!.CsTypeName}[]",

@@ -1,9 +1,9 @@
 .ccls-cache/
 .cmake/
-cmake-build-debug/
+cmake-build-*/
 .kdev4/
-.vscode/
 generated/
+!**/protobuf/generated/
 
 # configure_file auto generated.
 configs/addons/metamod/counterstrikesharp.vdf
@@ -12,6 +12,7 @@ libraries/mono/
 
 CMakeSettings.json
 
+build-*/
 build/
 build_test/
 
@@ -549,3 +550,8 @@ $RECYCLE.BIN/
 _NCrunch*
 
 .idea/
+
+# docfx
+docfx/_site/
+docfx/api/
+docfx/_exported_templates/

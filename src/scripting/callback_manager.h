@@ -35,7 +35,6 @@ class ScriptCallback
     unsigned int GetFunctionCount() { return m_functions.size(); }
     std::vector<CallbackT> GetFunctions() { return m_functions; }
 
-
     void Execute(bool bResetContext = true);
     void Reset();
     ScriptContextRaw& ScriptContext() { return m_script_context_raw; }
@@ -44,6 +43,7 @@ class ScriptCallback
   private:
     std::vector<CallbackT> m_functions;
     std::string m_name;
+    std::string m_profile_name;
     ScriptContextRaw m_script_context_raw;
     fxNativeContext m_root_context;
 };
@@ -62,6 +62,19 @@ class CallbackManager : public GlobalClass
 
   private:
     std::vector<ScriptCallback*> m_managed;
+};
+
+class CallbackPair
+{
+  public:
+    CallbackPair();
+    CallbackPair(bool bNoCallbacks);
+    ~CallbackPair();
+    bool HasCallbacks() const { return pre->GetFunctionCount() > 0 || post->GetFunctionCount() > 0; }
+
+  public:
+    ScriptCallback* pre;
+    ScriptCallback* post;
 };
 
 } // namespace counterstrikesharp

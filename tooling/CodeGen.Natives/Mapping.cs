@@ -54,6 +54,8 @@ public class Mapping
                 return "void";
             case "uint64":
                 return "ulong";
+            case "long":
+                return "long";
             case "func":
             case "callback":
                 return "InputArgument";
@@ -61,8 +63,18 @@ public class Mapping
                 return "object[]";
             case "SteamID":
                 return "[CastFrom(typeof(ulong))]SteamID";
+            case "HookMode":
+                return "HookMode";
+            case "ListenOverride":
+                return "ListenOverride";
             case "DataType_t":
                 return "DataType";
+            case "CommandCallingContext":
+                return "CommandCallingContext";
+            case "UserMessage":
+                return "UserMessage";
+            case "RecipientFilter":
+                return "RecipientFilter";
             case "any":
                 return "T";
         }
@@ -82,7 +94,7 @@ public class Mapping
             case "player_controller":
             case "player_pawn":
             case "player_controller_and_pawn":
-                return "CCSPlayerController";
+                return "CCSPlayerController?";
             case "ehandle":
                 return "IntPtr";
             case "uint64":

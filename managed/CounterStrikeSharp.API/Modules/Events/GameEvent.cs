@@ -32,14 +32,18 @@ namespace CounterStrikeSharp.API.Modules.Events
 
     public class GameEvent : NativeObject
     {
+        // Used to track freeable state for manually created events.
+        private bool _freeable = false;
+
         public GameEvent(IntPtr pointer) : base(pointer)
         {
         }
-        
+
         public GameEvent(string name, bool force) : this(NativeAPI.CreateEvent(name, force))
         {
+            _freeable = true;
         }
-        
+
         public string EventName => NativeAPI.GetEventName(Handle);
 
         public T Get<T>(string name)
@@ -54,7 +58,9 @@ namespace CounterStrikeSharp.API.Modules.Events
                 _ when type == typeof(bool) => GetBool(name),
                 _ when type == typeof(ulong) => GetUint64(name),
                 _ when type == typeof(long) => (long)GetUint64(name),
-                _ when type == typeof(CCSPlayerController) => GetPlayer(name),
+                // This is a special case for player controllers as this method previously did not allow for nullable returns.
+                // So we return an invalid player controller if the player is not found.
+                _ when type == typeof(CCSPlayerController) => GetPlayer(name) ?? new CCSPlayerController(0),
                 _ => throw new NotSupportedException(),
             };
 
@@ -76,8 +82,7 @@ namespace CounterStrikeSharp.API.Modules.Events
                     SetInt(name, i);
                     break;
                 case var _ when value is CCSPlayerController player:
-                    // When I was testing this, the code seems to expect a slot, even though it is called index
-                    SetEntityIndex(name, (int)player.EntityIndex.Value.Value - 1);
+                    SetPlayer(name, player);
                     break;
                 case var _ when value is string s:
                     SetString(name, s);
@@ -101,9 +106,15 @@ namespace CounterStrikeSharp.API.Modules.Events
         protected string GetString(string name) => NativeAPI.GetEventString(Handle, name);
         protected int GetInt(string name) => NativeAPI.GetEventInt(Handle, name);
 
-        protected CCSPlayerController GetPlayer(string name)
+        protected CCSPlayerController? GetPlayer(string name)
         {
-            return new CCSPlayerController(NativeAPI.GetEventPlayerController(Handle, name));
+            var ptr = NativeAPI.GetEventPlayerController(Handle, name);
+            if (ptr == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            return new CCSPlayerController(ptr);
         }
 
         protected ulong GetUint64(string name) => NativeAPI.GetEventUint64(Handle, name);
@@ -122,7 +133,30 @@ namespace CounterStrikeSharp.API.Modules.Events
 
         protected void SetEntityIndex(string name, int value) => NativeAPI.SetEventEntityIndex(Handle, name, value);
 
-        public void FireEvent(bool dontBroadcast) => NativeAPI.FireEvent(Handle, dontBroadcast);
-        // public void FireEventToClient(int clientId, bool dontBroadcast) => NativeAPI.FireEventToClient(Handle, clientId);
+        protected void SetPlayer(string name, CCSPlayerController? player) => NativeAPI.SetEventPlayerController(Handle, name, player?.Handle ?? IntPtr.Zero);
+
+        public void FireEvent(bool dontBroadcast)
+        {
+            NativeAPI.FireEvent(Handle, dontBroadcast);
+            _freeable = false;
+        }
+
+        public void FireEventToClient(CCSPlayerController player) => NativeAPI.FireEventToClient(Handle, (int)player.Index);
+
+        /// <summary>
+        /// Used to manually free the event.
+        /// <remarks>If <see cref="FireEvent"/> is called, Free will be called automatically.</remarks>
+        /// </summary>
+        public void Free()
+        {
+            if (!_freeable)
+            {
+                throw new InvalidOperationException("Event is not able to be freed.");
+            }
+
+            NativeAPI.FreeEvent(Handle);
+
+            _freeable = false;
+        }
     }
 }

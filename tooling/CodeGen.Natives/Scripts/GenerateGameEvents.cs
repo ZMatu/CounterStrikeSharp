@@ -28,18 +28,53 @@ public partial class Generators
         public string NamePascalCase => Name.ToPascalCase();
         public string MappedType => Mapping.GetCSharpTypeFromGameEventType(Type);
         public string? Comment { get; set; }
+
+        public string Getter
+        {
+            get
+            {
+                if (MappedType == "CCSPlayerController?")
+                {
+                    return $"GetPlayer(\"{Name}\")";
+                }
+
+                return $"Get<{MappedType}>(\"{Name}\")";
+            }
+        }
+
+        public string Setter
+        {
+            get
+            {
+                if (MappedType == "CCSPlayerController?")
+                {
+                    return $"SetPlayer(\"{Name}\", value)";
+                }
+
+                return $"Set<{MappedType}>(\"{Name}\", value)";
+            }
+        }
     }
 
-    private static List<GameEvent> GetGameEvents()
+    private static HttpClient _httpClient = new HttpClient();
+    private static string BaseUrl = "https://raw.githubusercontent.com/SteamDatabase/GameTracking-CS2/master/";
+
+    private static List<string> GameEventFiles = new List<string>()
     {
-        // temporary, not committing resource files directly to git for now
-        var pathToSearch = @"/home/michael/Steam/cs2-ds/game/csgo/events/resource";
-        if (!Directory.Exists(pathToSearch)) Environment.Exit(0);
+        "game/core/pak01_dir/resource/core.gameevents",
+        "game/csgo/pak01_dir/resource/game.gameevents",
+        "game/csgo/pak01_dir/resource/mod.gameevents"
+    };
+
+    private static async Task<List<GameEvent>> GetGameEvents()
+    {
         var allGameEvents = new Dictionary<string, GameEvent>();
 
-        foreach (string file in Directory.EnumerateFiles(pathToSearch, "*.gameevents", SearchOption.AllDirectories).OrderBy(Path.GetFileName))
+        foreach (string url in GameEventFiles)
+        // foreach (string file in Directory.EnumerateFiles(pathToSearch, "*.gameevents", SearchOption.AllDirectories).OrderBy(Path.GetFileName))
         {
-            var deserialized = VdfConvert.Deserialize(File.ReadAllText(file));
+            var file = await _httpClient.GetStringAsync($"{BaseUrl}/{url}");
+            var deserialized = VdfConvert.Deserialize(file);
 
             var properties =
                 deserialized.Value.Where(x => x.Type == VTokenType.Property);
@@ -79,12 +114,11 @@ public partial class Generators
         return allGameEvents.Values.ToList();
     }
 
-    public static void GenerateGameEvents()
+
+
+    public static async Task GenerateGameEvents()
     {
-        var pathToSearch = @"/home/michael/Steam/cs2-ds/game/csgo/events/resource";
-        if (!Directory.Exists(pathToSearch)) return;
-            
-        var allGameEvents = GetGameEvents();
+        var allGameEvents = await GetGameEvents();
 
         var gameEventsString = string.Join("\n", allGameEvents.OrderBy(x => x.NamePascalCase).Select(gameEvent =>
         {
@@ -96,12 +130,12 @@ public partial class Generators
                     : key.NamePascalCase;
 
                 return $@"
-                
+
                 {(!string.IsNullOrEmpty(key.Comment) ? "// " + key.Comment : "")}
-                public {key.MappedType} {propertyName} 
+                public {key.MappedType} {propertyName}
                 {{
-                    get => Get<{key.MappedType}>(""{key.Name}"");
-                    set => Set<{key.MappedType}>(""{key.Name}"", value);
+                    get => {key.Getter};
+                    set => {key.Setter};
                 }}";
             });
             return $@"
@@ -114,9 +148,10 @@ public partial class Generators
                 {string.Join("\n", propertyDefinition)}
             }}";
         }));
-        
+
 
         var result = $@"
+#nullable enable
 using System;
 using CounterStrikeSharp.API.Modules.Events;
 using CounterStrikeSharp.API.Modules.Entities;
@@ -126,8 +161,9 @@ namespace CounterStrikeSharp.API.Core
 {{
     {gameEventsString}
 }}
+#nullable restore
 ";
-        
+
         Console.WriteLine($"Generated C# bindings for {allGameEvents.Count} game events successfully.");
 
         File.WriteAllText(Path.Join(Helpers.GetRootDirectory(), "managed/CounterStrikeSharp.API/Core/GameEvents.g.cs"),

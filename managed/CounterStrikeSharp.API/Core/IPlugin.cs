@@ -1,4 +1,4 @@
-﻿/*
+/*
  *  This file is part of CounterStrikeSharp.
  *  CounterStrikeSharp is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,28 +14,38 @@
  *  along with CounterStrikeSharp.  If not, see <https://www.gnu.org/licenses/>. *
  */
 
+using System;
+using CounterStrikeSharp.API.Core.Commands;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Localization;
+using Microsoft.Extensions.Logging;
+
 namespace CounterStrikeSharp.API.Core
 {
     /// <summary>
     /// Interface which every CounterStrikeSharp plugin must implement. Module will be created with parameterless constructor and then Load method will be called.
     /// </summary>
-    public interface IPlugin
+    public interface IPlugin : IDisposable
     {
         /// <summary>
-        /// Name of the plugin.
+        /// Name of the plugin as it will appear in the plugin list.
         /// </summary>
-        string ModuleName
-        {
-            get;
-        }
+        string ModuleName { get; }
 
         /// <summary>
-        /// Module version.
+        /// Module version as it will appear in the plugin list.
         /// </summary>
-        string ModuleVersion
-        {
-            get;
-        }
+        string ModuleVersion { get; }
+
+        /// <summary>
+        /// Author of the plugin as it will appear in the plugin list.
+        /// </summary>
+        string ModuleAuthor { get; }
+
+        /// <summary>
+        /// Brief description of the plugin as it will appear in the plugin list.
+        /// </summary>
+        string ModuleDescription { get; }
 
         /// <summary>
         /// This method is called by CounterStrikeSharp on plugin load and should be treated as plugin constructor.
@@ -48,5 +58,28 @@ namespace CounterStrikeSharp.API.Core
         /// Event handlers, listeners etc. will automatically be deregistered.
         /// </summary>
         void Unload(bool hotReload);
+
+        /// <summary>
+        /// Will be called by CounterStrikeSharp after all plugins have been loaded.
+        /// This will also be called for convenience after a reload or a late l oad, so that you don't have to handle
+        /// re-wiring everything.
+        /// </summary>
+        /// <param name="hotReload"></param>
+        void OnAllPluginsLoaded(bool hotReload);
+
+        /// <summary>
+        /// The path to the plugin's DLL file.
+        /// </summary>
+        string ModulePath { get; internal set; }
+
+        ILogger Logger { get; set; }
+
+        IStringLocalizer Localizer { get; set; }
+
+        ICommandManager CommandManager { get; set; }
+
+        void RegisterAllAttributes(object instance);
+
+        void InitializeConfig(object instance, Type pluginType);
     }
 }

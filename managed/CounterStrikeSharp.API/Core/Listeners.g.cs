@@ -2,6 +2,7 @@
 using System;
 using CounterStrikeSharp.API.Core.Attributes;
 using CounterStrikeSharp.API.Modules.Entities;
+using CounterStrikeSharp.API.Modules.Utils;
 
 namespace CounterStrikeSharp.API.Core
 {
@@ -94,6 +95,13 @@ namespace CounterStrikeSharp.API.Core
         public delegate void OnClientDisconnectPost(int playerSlot);
 
         /// <summary>
+        /// Called when a client transmits voice data
+        /// </summary>
+        /// <param name="playerSlot">The player slot of the client.</param>
+        [ListenerName("OnClientVoice")]
+        public delegate void OnClientVoice(int playerSlot);
+
+        /// <summary>
         /// Called when a client has been authorized by Steam.
         /// </summary>
         /// <param name="playerSlot">The player slot of the authorized client.</param>
@@ -126,5 +134,34 @@ namespace CounterStrikeSharp.API.Core
         /// <param name="hostname">New hostname of the server</param>
         [ListenerName("OnHostNameChanged")]
         public delegate void OnHostNameChanged(string hostname);
+
+        /// <summary>
+        /// Called before the server enters fatal shutdown.
+        /// </summary>
+        [ListenerName("OnPreFatalShutdown")]
+        public delegate void OnServerPreFatalShutdown();
+
+        /// <summary>
+        /// Called when the server is in a loading stage.
+        /// </summary>
+        /// <param name="frameTime"></param>
+        [ListenerName("OnUpdateWhenNotInGame")]
+        public delegate void OnUpdateWhenNotInGame(float frameTime);
+
+        /// <summary>
+        /// Called before the world updates.
+        /// This seems to be called even when the server is hibernating.
+        /// </summary>
+        /// <param name="simulating"><see langword="true"/> if simulating, <see langword="false"/> otherwise</param>
+        [ListenerName("OnServerPreWorldUpdate")]
+        public delegate void OnServerPreWorldUpdate(bool simulating);
+
+
+        /// <summary>
+        /// Called when the server precaching resources (only when initial startup / changing map).
+        /// </summary>
+        /// <param name="manifest">Resource Manifest</param>
+        [ListenerName("OnServerPrecacheResources")]
+        public delegate void OnServerPrecacheResources(ResourceManifest manifest);
     }
 }

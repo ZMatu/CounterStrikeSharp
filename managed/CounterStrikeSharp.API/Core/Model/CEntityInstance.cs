@@ -12,23 +12,41 @@ namespace CounterStrikeSharp.API.Core;
 
 public partial class CEntityInstance : IEquatable<CEntityInstance>
 {
-    public bool IsValid => Handle != IntPtr.Zero;
+    public CEntityInstance(IntPtr pointer) : base(pointer)
+    {
+    }
 
-    public CEntityIndex? EntityIndex => IsValid ? Entity?.EntityHandle.Index : null;
+    public CEntityInstance(uint rawHandle) : base(rawHandle)
+    {
+    }
+    
+    /// <summary>
+    /// Checks that the entity handle is valid and the handle points to a valid entity
+    /// </summary>
+    public bool IsValid => EntityHandle.IsValid && Handle != IntPtr.Zero;
+
+    [Obsolete("Use Index instead", true)]
+    public CEntityIndex? EntityIndex => new CEntityIndex(EntityHandle.Index);
+    
+    public uint Index => EntityHandle.Index;
     
     public string DesignerName => IsValid ? Entity?.DesignerName : null;
 
-    public void Remove() => VirtualFunctions.UTIL_Remove(this.Handle);
+    public void Remove()
+    {
+        Guard.IsValidEntity(this);
 
-
+        VirtualFunctions.UTIL_Remove(this.Handle);
+    }
+    
     public bool Equals(CEntityInstance? other)
     {
-        return this.Handle == other?.Handle;
+        return this.EntityHandle.Equals(other?.EntityHandle);
     }
 
     public override bool Equals(object? obj)
     {
-        return ReferenceEquals(this, obj) || obj is CEntityInstance other && Equals(other);
+        return obj is CEntityInstance other && Equals(other);
     }
 
     public override int GetHashCode()
@@ -45,10 +63,54 @@ public partial class CEntityInstance : IEquatable<CEntityInstance>
     {
         return !Equals(left, right);
     }
+
+    /// <summary>
+    /// Calls a named input method on an entity, this will bypass the map IO event queue system.
+    /// <example>
+    /// <code>
+    /// entity.AcceptInput("Break");
+    /// </code>
+    /// </example>
+    /// </summary>
+    /// <param name="inputName">Input action name</param>
+    /// <param name="activator">Entity which initiated the action, <see langword="null"/> for no entity</param>
+    /// <param name="caller">Entity that is sending the event, <see langword="null"/> for no entity</param>
+    /// <param name="value">String variant value to send with the event</param>
+    /// <param name="outputId">Unknown, defaults to 0</param>
+    /// <exception cref="InvalidOperationException">Entity is not valid</exception>
+    public void AcceptInput(string inputName, CEntityInstance? activator = null, CEntityInstance? caller = null, string value = "", int outputId = 0)
+    {
+        Guard.IsValidEntity(this);
+
+        NativeAPI.AcceptInput(Handle, inputName, activator?.Handle ?? IntPtr.Zero, caller?.Handle ?? IntPtr.Zero, value, outputId);
+    }
+
+
+    /// <summary>
+    /// Calls a named input method on an entity, conforming to the map IO event queue system.
+    /// <example>
+    /// <code>
+    /// entity.AddEntityIOEvent("Break");
+    /// </code>
+    /// </example>
+    /// </summary>
+    /// <param name="inputName">Input action name</param>
+    /// <param name="activator">Entity which initiated the action, <see langword="null"/> for no entity</param>
+    /// <param name="caller">Entity that is sending the event, <see langword="null"/> for no entity</param>
+    /// <param name="value">String variant value to send with the event</param>
+    /// <param name="delay">Delay in seconds before calling the input</param>
+    /// <param name="outputId">Unknown, defaults to 0</param>
+    /// <exception cref="InvalidOperationException">Entity is not valid</exception>
+    public void AddEntityIOEvent(string inputName, CEntityInstance? activator = null, CEntityInstance? caller = null, string value = "", float delay = 0, int outputId = 0)
+    {
+        Guard.IsValidEntity(this);
+
+        NativeAPI.AddEntityIoEvent(Handle, inputName, activator?.Handle ?? IntPtr.Zero, caller?.Handle ?? IntPtr.Zero, value, delay, outputId);
+    }
 }
 
 public partial class CEntityIdentity
 {
     public unsafe CEntityInstance EntityInstance => new(Unsafe.Read<IntPtr>((void*)Handle));
-    public unsafe CHandle<CEntityInstance> EntityHandle => new(Handle + 0x10);
+    public unsafe CHandle<CEntityInstance> EntityHandle => new(this.Handle + 0x10);
 }

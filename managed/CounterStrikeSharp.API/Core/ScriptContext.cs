@@ -28,6 +28,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
+using CounterStrikeSharp.API.Modules.Utils;
 
 namespace CounterStrikeSharp.API.Core
 {
@@ -67,13 +68,11 @@ namespace CounterStrikeSharp.API.Core
 
         public unsafe ScriptContext()
 		{
-            //Console.WriteLine("Global context address: " + (IntPtr)m_extContext);
 		}
 
         public unsafe ScriptContext(fxScriptContext* context)
         {
             m_extContext = *context;
-            //Console.WriteLine("Global context address: " + (IntPtr)m_extContext);
         }
 
 		private readonly ConcurrentQueue<Action> ms_finalizers = new ConcurrentQueue<Action>();
@@ -83,6 +82,8 @@ namespace CounterStrikeSharp.API.Core
 		internal object Lock => ms_lock;
 
 		internal fxScriptContext m_extContext = new fxScriptContext();
+
+        internal bool isCleanupLocked = false;
 
 		[SecuritySafeCritical]
 		public void Reset()
@@ -102,8 +103,16 @@ namespace CounterStrikeSharp.API.Core
 		[SecuritySafeCritical]
 		public void Invoke()
 		{
-			InvokeNativeInternal();
-			GlobalCleanUp();
+            if (!isCleanupLocked)
+            {
+                isCleanupLocked = true;
+                InvokeNativeInternal();
+                GlobalCleanUp();
+                isCleanupLocked = false;
+                return;
+            }
+
+            InvokeNativeInternal();
 		}
 
 		[SecurityCritical]
@@ -205,6 +214,25 @@ namespace CounterStrikeSharp.API.Core
 			{
 				Push(context, ia.Value);
 
+				return;
+			}
+            else if (arg is IMarshalToNative marshalToNative)
+            {
+                foreach (var value in marshalToNative.GetNativeObject())
+                {
+                    Push(context ,value);
+                }
+
+                return;
+            }
+			else if (arg is NativeObject nativeObject)
+			{
+				Push(context, (InputArgument)nativeObject);
+				return;
+			}
+			else if (arg is NativeEntity nativeValue)
+			{
+				Push(context, (InputArgument)nativeValue);
 				return;
 			}
 
